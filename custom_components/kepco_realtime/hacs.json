@@ -1,0 +1,7 @@
+{
+  "name": "한전 실시간 사용량",
+  "content_in_root": false,
+  "render_readme": false,
+  "filename": "kepco_realtime.zip",
+  "homeassistant": "2024.1.0"
+}
