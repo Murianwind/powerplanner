@@ -38,6 +38,16 @@ class KepcoApiClient:
         self._password = password
         self._session: AsyncSession | None = None
 
+    async def _new_session(self) -> AsyncSession:
+        """기존 세션을 닫고 새 세션을 만듭니다."""
+        if self._session:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+        self._session = AsyncSession(impersonate="chrome120")
+        return self._session
+
     async def _get_session(self) -> AsyncSession:
         """세션을 반환합니다. 없으면 새로 만듭니다."""
         if self._session is None:
@@ -51,8 +61,8 @@ class KepcoApiClient:
             self._session = None
 
     async def async_login(self) -> bool:
-        """파워플래너에 로그인합니다."""
-        session = await self._get_session()
+        """파워플래너에 로그인합니다. 항상 새 세션으로 시작합니다."""
+        session = await self._new_session()
 
         try:
             resp = await session.get(INTRO_URL)
@@ -113,17 +123,17 @@ class KepcoApiClient:
             resp.raise_for_status()
             data = resp.json()
         except Exception:
-            _LOGGER.warning("API 호출 실패, 재로그인 시도")
+            _LOGGER.warning("API 호출 실패, 새 세션으로 재로그인 시도")
             if not await self.async_login():
                 raise KepcoAuthError("재로그인 실패")
             try:
+                session = await self._get_session()
                 resp = await session.post(RECENT_USAGE_URL, json={})
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as err:
                 raise KepcoApiError(f"재시도 후에도 실패: {err}") from err
 
-        # getRM0201.do 응답은 최상위가 바로 데이터 딕셔너리
         if not isinstance(data, dict):
             raise KepcoApiError(f"예상치 못한 응답 형식: {type(data)}")
 
