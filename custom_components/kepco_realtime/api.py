@@ -94,12 +94,8 @@ class KepcoApiClient:
             raise KepcoAuthError("RSA 키 또는 세션 ID를 찾을 수 없습니다.")
 
         exponent = exponent_tag["value"].strip()
-
-        _LOGGER.warning(
-            "쿠키 획득 — cookieSsId 앞20자: %s / exponent: %s",
-            cookie_ss_id[:20] if cookie_ss_id else None,
-            exponent,
-        )
+        _LOGGER.warning("쿠키 획득 — cookieSsId 앞20자: %s / exponent: %s",
+                        cookie_ss_id[:20], exponent)
 
         # 2단계: RSA 암호화
         try:
@@ -161,17 +157,14 @@ class KepcoApiClient:
         _LOGGER.warning("로그인 응답 url=%s status=%s", resp.url, resp.status_code)
 
         if "confirmInfo.do" in str(resp.url):
-            _LOGGER.warning("로그인 성공")
+            _LOGGER.warning("로그인 성공!")
             return True
 
-        # 실패 시 status 변수 확인
         fail_soup = BeautifulSoup(resp.text, "html.parser")
-        status_script = fail_soup.find("script", string=lambda t: t and "status" in t if t else False)
-        _LOGGER.error(
-            "로그인 실패 url=%s — status 스크립트: %s",
-            resp.url,
-            status_script.text[:300] if status_script else "없음",
-        )
+        status_tag = fail_soup.find("script", string=lambda t: t and "var status" in t if t else False)
+        _LOGGER.error("로그인 실패 url=%s / status스크립트: %s",
+                      resp.url,
+                      status_tag.text[200:500] if status_tag else "없음")
         return False
 
     async def async_get_realtime_usage(self) -> dict:
@@ -205,5 +198,5 @@ class KepcoApiClient:
         if not isinstance(data, dict):
             raise KepcoApiError(f"예상치 못한 응답 형식: {type(data)}")
 
-        _LOGGER.debug("KEPCO API 응답 수신 완료: F_AP_QT=%s", data.get("F_AP_QT"))
+        _LOGGER.warning("KEPCO API 응답 수신 완료: F_AP_QT=%s", data.get("F_AP_QT"))
         return data
