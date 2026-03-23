@@ -80,11 +80,9 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"인트로 페이지 접근 실패: {err}") from err
 
-        # RSA Modulus는 cookieRsa 쿠키에, SESSID는 cookieSsId 쿠키에 있음
         cookie_rsa = session.cookies.get("cookieRsa")
         cookie_ss_id = session.cookies.get("cookieSsId")
 
-        # Exponent는 HTML에 있음
         soup = BeautifulSoup(resp.text, "html.parser")
         exponent_tag = soup.find("input", {"id": "RSAExponent"})
 
@@ -107,9 +105,35 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"RSA 암호화 실패: {err}") from err
 
-        # 3단계: 로그인 POST
-        # 폼 필드명: USER_ID, USER_PWD (HTML 확인)
-        # 로그인 action: /login
+        # 3단계: chkUser.do 호출 — SSO_ID 값 획득 (브라우저 로그인 흐름과 동일)
+        sso_id = ""
+        try:
+            chk_resp = await session.post(
+                f"{BASE_URL}/intro/chkUser.do",
+                json={
+                    "USER_ID": f"{cookie_ss_id}_{enc_id}",
+                    "USER_PWD": f"{cookie_ss_id}_{enc_pw}",
+                    "USER_CI": "",
+                    "TYPE": "I",
+                },
+                headers={
+                    "Content-Type": "application/json",
+                    "Referer": INTRO_URL,
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+            )
+            chk_data = chk_resp.json()
+            _LOGGER.debug("chkUser 응답: %s", chk_data)
+            result = chk_data.get("result", "")
+            if result == "success":
+                sso_id = chk_data.get("USER_SSO_YN", "")
+            elif result == "addCustno":
+                _LOGGER.error("고객번호 추가 필요 — 파워플래너 웹에서 먼저 설정해주세요.")
+                return False
+        except Exception as err:
+            _LOGGER.warning("chkUser.do 호출 실패 (무시하고 진행): %s", err)
+
+        # 4단계: 로그인 POST
         try:
             resp = await session.post(
                 LOGIN_URL,
@@ -117,7 +141,7 @@ class KepcoApiClient:
                     "USER_ID": f"{cookie_ss_id}_{enc_id}",
                     "USER_PWD": f"{cookie_ss_id}_{enc_pw}",
                     "APT_YN": "N",
-                    "SSO_ID": "",
+                    "SSO_ID": sso_id,
                 },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
@@ -135,6 +159,7 @@ class KepcoApiClient:
             return True
 
         _LOGGER.error("로그인 실패: %s", resp.url)
+        _LOGGER.error("로그인 실패 응답 body: %s", resp.text[:500])
         return False
 
     async def async_get_realtime_usage(self) -> dict:
