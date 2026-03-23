@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 
-import rsa
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 
@@ -21,13 +20,14 @@ _COMMON_HEADERS = {
 }
 
 
-def _rsa_encrypt(modulus_hex: str, exponent_hex: str, message: str) -> str:
-    """RSA 공개키로 메시지를 PKCS#1 v1.5 패딩 방식으로 암호화합니다."""
+def _rsa_encrypt_raw(modulus_hex: str, exponent_hex: str, message: str) -> str:
+    """한전 jsbn.js 방식 raw RSA 암호화 (패딩 없음)."""
     modulus = int(modulus_hex, 16)
     exponent = int(exponent_hex, 16)
-    pub_key = rsa.PublicKey(modulus, exponent)
-    encrypted = rsa.encrypt(message.encode("utf-8"), pub_key)
-    return encrypted.hex()
+    message_int = int(message.encode("utf-8").hex(), 16)
+    encrypted_int = pow(message_int, exponent, modulus)
+    byte_length = (modulus.bit_length() + 7) // 8
+    return format(encrypted_int, f"0{byte_length * 2}x")
 
 
 class KepcoApiError(Exception):
@@ -94,13 +94,12 @@ class KepcoApiClient:
             raise KepcoAuthError("RSA 키 또는 세션 ID를 찾을 수 없습니다.")
 
         exponent = exponent_tag["value"].strip()
-        _LOGGER.warning("쿠키 획득 — cookieSsId 앞20자: %s / exponent: %s",
-                        cookie_ss_id[:20], exponent)
+        _LOGGER.warning("쿠키 획득 완료 — exponent: %s", exponent)
 
-        # 2단계: RSA 암호화
+        # 2단계: raw RSA 암호화 (한전 jsbn.js 방식)
         try:
-            enc_id = _rsa_encrypt(cookie_rsa, exponent, self._username)
-            enc_pw = _rsa_encrypt(cookie_rsa, exponent, self._password)
+            enc_id = _rsa_encrypt_raw(cookie_rsa, exponent, self._username)
+            enc_pw = _rsa_encrypt_raw(cookie_rsa, exponent, self._password)
         except Exception as err:
             raise KepcoAuthError(f"RSA 암호화 실패: {err}") from err
 
@@ -139,7 +138,6 @@ class KepcoApiClient:
             "APT_YN": "N",
             "SSO_ID": sso_id,
         }
-        _LOGGER.warning("로그인 파라미터 키: %s", list(login_data.keys()))
 
         try:
             resp = await session.post(
@@ -198,5 +196,5 @@ class KepcoApiClient:
         if not isinstance(data, dict):
             raise KepcoApiError(f"예상치 못한 응답 형식: {type(data)}")
 
-        _LOGGER.warning("KEPCO API 응답 수신 완료: F_AP_QT=%s", data.get("F_AP_QT"))
+        _LOGGER.warning("KEPCO API 응답 수신: F_AP_QT=%s", data.get("F_AP_QT"))
         return data
