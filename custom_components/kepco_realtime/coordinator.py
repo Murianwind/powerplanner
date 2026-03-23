@@ -1,4 +1,6 @@
 """데이터 갱신 코디네이터."""
+from __future__ import annotations
+
 import logging
 from datetime import timedelta
 
@@ -11,10 +13,11 @@ from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 
-class KepcoCoordinator(DataUpdateCoordinator):
+class KepcoCoordinator(DataUpdateCoordinator[dict]):
     """지정된 주기마다 한전 API를 호출해 데이터를 갱신합니다."""
 
-    def __init__(self, hass: HomeAssistant, client: KepcoApiClient):
+    def __init__(self, hass: HomeAssistant, client: KepcoApiClient) -> None:
+        """코디네이터를 초기화합니다."""
         super().__init__(
             hass,
             _LOGGER,

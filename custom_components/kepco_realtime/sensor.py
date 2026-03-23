@@ -1,4 +1,6 @@
 """한전 실시간 사용량 센서."""
+from __future__ import annotations
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -22,11 +24,11 @@ async def async_setup_entry(
 ) -> None:
     """config_entry로부터 센서를 등록합니다."""
     coordinator: KepcoCoordinator = hass.data[DOMAIN][entry.entry_id]
-    username = entry.data["username"]
+    username: str = entry.data["username"]
     async_add_entities([KepcoRealtimeUsageSensor(coordinator, entry, username)])
 
 
-class KepcoRealtimeUsageSensor(CoordinatorEntity, SensorEntity):
+class KepcoRealtimeUsageSensor(CoordinatorEntity[KepcoCoordinator], SensorEntity):
     """실시간 누적 사용량 센서."""
 
     _attr_device_class = SensorDeviceClass.ENERGY
@@ -41,12 +43,11 @@ class KepcoRealtimeUsageSensor(CoordinatorEntity, SensorEntity):
         coordinator: KepcoCoordinator,
         entry: ConfigEntry,
         username: str,
-    ):
+    ) -> None:
+        """센서를 초기화합니다."""
         super().__init__(coordinator)
         self._username = username
         self._attr_unique_id = f"{DOMAIN}_{username}_realtime_usage"
-
-        # HA 기기(Device)로 등록 — 설정 → 기기 및 서비스 → 기기 탭에서 표시됨
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, username)},
             name=f"한전 파워플래너 ({username})",
@@ -67,7 +68,7 @@ class KepcoRealtimeUsageSensor(CoordinatorEntity, SensorEntity):
             return None
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, str | int | None]:
         """추가 속성값."""
         if not self.coordinator.data:
             return {}

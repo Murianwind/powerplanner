@@ -1,5 +1,8 @@
 """한전 파워플래너 API 클라이언트."""
+from __future__ import annotations
+
 import logging
+
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 
@@ -10,13 +13,10 @@ _LOGGER = logging.getLogger(__name__)
 
 def _rsa_encrypt(modulus_hex: str, exponent_hex: str, message: str) -> str:
     """RSA 공개키로 메시지를 암호화합니다."""
-    # 한전 파워플래너와 동일한 RSA 암호화 방식 (PKCS#1 v1.5 없이 raw RSA)
     modulus = int(modulus_hex, 16)
     exponent = int(exponent_hex, 16)
-    message_bytes = message.encode("utf-8")
-    message_int = int.from_bytes(message_bytes, byteorder="big")
+    message_int = int.from_bytes(message.encode("utf-8"), byteorder="big")
     encrypted_int = pow(message_int, exponent, modulus)
-    # 모듈러스 길이(바이트)에 맞춰 패딩
     byte_length = (modulus.bit_length() + 7) // 8
     return encrypted_int.to_bytes(byte_length, byteorder="big").hex()
 
@@ -32,7 +32,8 @@ class KepcoAuthError(KepcoApiError):
 class KepcoApiClient:
     """한전 파워플래너 API 클라이언트."""
 
-    def __init__(self, username: str, password: str):
+    def __init__(self, username: str, password: str) -> None:
+        """클라이언트를 초기화합니다."""
         self._username = username
         self._password = password
         self._session: AsyncSession | None = None
@@ -43,7 +44,7 @@ class KepcoApiClient:
             self._session = AsyncSession(impersonate="chrome120")
         return self._session
 
-    async def async_close(self):
+    async def async_close(self) -> None:
         """세션을 종료합니다."""
         if self._session:
             await self._session.close()
@@ -53,7 +54,6 @@ class KepcoApiClient:
         """파워플래너에 로그인합니다."""
         session = await self._get_session()
 
-        # 1단계: intro 페이지에서 RSA 공개키 및 세션 ID 획득
         try:
             resp = await session.get(INTRO_URL)
             resp.raise_for_status()
@@ -74,21 +74,19 @@ class KepcoApiClient:
 
         _LOGGER.debug("RSA 키 및 세션 ID 획득 완료")
 
-        # 2단계: RSA 암호화
         try:
             enc_id = _rsa_encrypt(modulus, exponent, self._username)
             enc_pw = _rsa_encrypt(modulus, exponent, self._password)
         except Exception as err:
             raise KepcoAuthError(f"RSA 암호화 실패: {err}") from err
 
-        # 3단계: 로그인 요청
-        user_id = f"{sessid}_{enc_id}"
-        user_pw = f"{sessid}_{enc_pw}"
-
         try:
             resp = await session.post(
                 LOGIN_URL,
-                data={"USER_ID": user_id, "USER_PW": user_pw},
+                data={
+                    "USER_ID": f"{sessid}_{enc_id}",
+                    "USER_PW": f"{sessid}_{enc_pw}",
+                },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": INTRO_URL,
@@ -99,16 +97,15 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"로그인 요청 실패: {err}") from err
 
-        # confirmInfo.do 로 리다이렉트되면 성공
         if "confirmInfo.do" in str(resp.url):
             _LOGGER.debug("로그인 성공")
             return True
 
-        _LOGGER.error("로그인 실패 (confirmInfo.do 미도달): %s", resp.url)
+        _LOGGER.error("로그인 실패: %s", resp.url)
         return False
 
     async def async_get_realtime_usage(self) -> dict:
-        """실시간 사용량 데이터를 가져옵니다. 세션 만료 시 재로그인합니다."""
+        """실시간 사용량 데이터를 가져옵니다."""
         session = await self._get_session()
 
         try:
@@ -116,7 +113,6 @@ class KepcoApiClient:
             resp.raise_for_status()
             data = resp.json()
         except Exception:
-            # 실패 시 재로그인 후 재시도
             _LOGGER.warning("API 호출 실패, 재로그인 시도")
             if not await self.async_login():
                 raise KepcoAuthError("재로그인 실패")
