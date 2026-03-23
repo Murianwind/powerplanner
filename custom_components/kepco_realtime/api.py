@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+import rsa
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 
@@ -12,13 +13,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _rsa_encrypt(modulus_hex: str, exponent_hex: str, message: str) -> str:
-    """RSA 공개키로 메시지를 암호화합니다."""
+    """RSA 공개키로 메시지를 PKCS#1 v1.5 패딩 방식으로 암호화합니다."""
     modulus = int(modulus_hex, 16)
     exponent = int(exponent_hex, 16)
-    message_int = int.from_bytes(message.encode("utf-8"), byteorder="big")
-    encrypted_int = pow(message_int, exponent, modulus)
-    byte_length = (modulus.bit_length() + 7) // 8
-    return encrypted_int.to_bytes(byte_length, byteorder="big").hex()
+    pub_key = rsa.PublicKey(modulus, exponent)
+    encrypted = rsa.encrypt(message.encode("utf-8"), pub_key)
+    return encrypted.hex()
 
 
 class KepcoApiError(Exception):
