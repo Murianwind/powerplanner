@@ -123,10 +123,9 @@ class KepcoApiClient:
             except Exception as err:
                 raise KepcoApiError(f"재시도 후에도 실패: {err}") from err
 
-        _LOGGER.warning("KEPCO API 전체 응답: %s", data)
+        # getRM0201.do 응답은 최상위가 바로 데이터 딕셔너리
+        if not isinstance(data, dict):
+            raise KepcoApiError(f"예상치 못한 응답 형식: {type(data)}")
 
-        result = data.get("result", {})
-        if not result:
-            raise KepcoApiError("API 응답에 result 없음")
-
-        return result
+        _LOGGER.debug("KEPCO API 응답 수신 완료: F_AP_QT=%s", data.get("F_AP_QT"))
+        return data
