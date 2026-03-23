@@ -104,7 +104,7 @@ class KepcoApiClient:
         _LOGGER.error("로그인 실패: %s", resp.url)
         return False
 
-async def async_get_realtime_usage(self) -> dict:
+    async def async_get_realtime_usage(self) -> dict:
         """실시간 사용량 데이터를 가져옵니다."""
         session = await self._get_session()
 
@@ -123,7 +123,6 @@ async def async_get_realtime_usage(self) -> dict:
             except Exception as err:
                 raise KepcoApiError(f"재시도 후에도 실패: {err}") from err
 
-        # 실제 응답 구조 확인용 — 문제 파악 후 제거
         _LOGGER.warning("KEPCO API 전체 응답: %s", data)
 
         result = data.get("result", {})
