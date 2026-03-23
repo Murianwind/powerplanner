@@ -7,9 +7,18 @@ import rsa
 from bs4 import BeautifulSoup
 from curl_cffi.requests import AsyncSession
 
-from .const import INTRO_URL, LOGIN_URL, RECENT_USAGE_URL
+from .const import BASE_URL, INTRO_URL, LOGIN_URL, RECENT_USAGE_URL
 
 _LOGGER = logging.getLogger(__name__)
+
+_COMMON_HEADERS = {
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Content-Type": "application/json",
+    "Origin": BASE_URL,
+    "Referer": f"{BASE_URL}/rm/rm0201.do?menu_id=O020101",
+    "X-Requested-With": "XMLHttpRequest",
+}
 
 
 def _rsa_encrypt(modulus_hex: str, exponent_hex: str, message: str) -> str:
@@ -37,7 +46,6 @@ class KepcoApiClient:
         self._username = username
         self._password = password
         self._session: AsyncSession | None = None
-        self._cookie_ss_id: str | None = None
 
     async def _new_session(self) -> AsyncSession:
         """기존 세션을 닫고 새 세션을 만듭니다."""
@@ -64,83 +72,81 @@ class KepcoApiClient:
     async def async_login(self) -> bool:
         """파워플래너에 로그인합니다. 항상 새 세션으로 시작합니다."""
         session = await self._new_session()
-        self._cookie_ss_id = None
 
+        # 1단계: intro 페이지 접근 — cookieRsa, cookieSsId 쿠키 획득
         try:
             resp = await session.get(INTRO_URL)
             resp.raise_for_status()
         except Exception as err:
             raise KepcoAuthError(f"인트로 페이지 접근 실패: {err}") from err
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        modulus_tag = soup.find("input", {"id": "RSAModulus"})
-        exponent_tag = soup.find("input", {"id": "RSAExponent"})
-        sessid_tag = soup.find("input", {"id": "SESSID"})
+        # RSA Modulus는 cookieRsa 쿠키에, SESSID는 cookieSsId 쿠키에 있음
+        cookie_rsa = session.cookies.get("cookieRsa")
+        cookie_ss_id = session.cookies.get("cookieSsId")
 
-        if not modulus_tag or not exponent_tag or not sessid_tag:
+        # Exponent는 HTML에 있음
+        soup = BeautifulSoup(resp.text, "html.parser")
+        exponent_tag = soup.find("input", {"id": "RSAExponent"})
+
+        if not cookie_rsa or not cookie_ss_id or not exponent_tag:
+            _LOGGER.error(
+                "쿠키 또는 RSAExponent 획득 실패 — cookieRsa=%s cookieSsId=%s exponent=%s",
+                bool(cookie_rsa),
+                bool(cookie_ss_id),
+                bool(exponent_tag),
+            )
             raise KepcoAuthError("RSA 키 또는 세션 ID를 찾을 수 없습니다.")
 
-        modulus = modulus_tag["value"].strip()
         exponent = exponent_tag["value"].strip()
-        sessid = sessid_tag["value"].strip()
-
         _LOGGER.debug("RSA 키 및 세션 ID 획득 완료")
 
+        # 2단계: RSA 암호화
         try:
-            enc_id = _rsa_encrypt(modulus, exponent, self._username)
-            enc_pw = _rsa_encrypt(modulus, exponent, self._password)
+            enc_id = _rsa_encrypt(cookie_rsa, exponent, self._username)
+            enc_pw = _rsa_encrypt(cookie_rsa, exponent, self._password)
         except Exception as err:
             raise KepcoAuthError(f"RSA 암호화 실패: {err}") from err
 
+        # 3단계: 로그인 POST
+        # 폼 필드명: USER_ID, USER_PWD (HTML 확인)
+        # 로그인 action: /login
         try:
             resp = await session.post(
                 LOGIN_URL,
                 data={
-                    "USER_ID": f"{sessid}_{enc_id}",
-                    "USER_PW": f"{sessid}_{enc_pw}",
+                    "USER_ID": f"{cookie_ss_id}_{enc_id}",
+                    "USER_PWD": f"{cookie_ss_id}_{enc_pw}",
+                    "APT_YN": "N",
+                    "SSO_ID": "",
                 },
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": INTRO_URL,
-                    "Cookie": f"JSESSIONID={sessid}",
                 },
                 allow_redirects=True,
             )
         except Exception as err:
             raise KepcoAuthError(f"로그인 요청 실패: {err}") from err
 
-        if "confirmInfo.do" not in str(resp.url):
-            _LOGGER.error("로그인 실패: %s", resp.url)
-            return False
+        _LOGGER.debug("로그인 응답 url=%s status=%s", resp.url, resp.status_code)
 
-        # 로그인 성공 후 cookieSsId 추출
-        cookie_ss_id = session.cookies.get("cookieSsId")
-        if not cookie_ss_id:
-            # 응답 헤더에서 직접 찾기
-            for header_val in resp.headers.get_list("set-cookie"):
-                if "cookieSsId" in header_val:
-                    cookie_ss_id = header_val.split("cookieSsId=")[1].split(";")[0]
-                    break
+        if "confirmInfo.do" in str(resp.url):
+            _LOGGER.debug("로그인 성공")
+            return True
 
-        if cookie_ss_id:
-            self._cookie_ss_id = cookie_ss_id
-            _LOGGER.debug("cookieSsId 획득 완료")
-        else:
-            _LOGGER.warning("cookieSsId를 찾을 수 없습니다. 세션 쿠키로 시도합니다.")
-
-        _LOGGER.debug("로그인 성공")
-        return True
+        _LOGGER.error("로그인 실패: %s", resp.url)
+        return False
 
     async def async_get_realtime_usage(self) -> dict:
         """실시간 사용량 데이터를 가져옵니다."""
         session = await self._get_session()
 
-        headers: dict[str, str] = {}
-        if self._cookie_ss_id:
-            headers["Cookie"] = f"cookieSsId={self._cookie_ss_id}"
-
         try:
-            resp = await session.post(RECENT_USAGE_URL, json={}, headers=headers)
+            resp = await session.post(
+                RECENT_USAGE_URL,
+                json={"menuType": "time", "TOU": False},
+                headers=_COMMON_HEADERS,
+            )
             resp.raise_for_status()
             data = resp.json()
         except Exception as err:
@@ -149,15 +155,10 @@ class KepcoApiClient:
                 raise KepcoAuthError("재로그인 실패")
             try:
                 session = await self._get_session()
-                headers = {}
-                if self._cookie_ss_id:
-                    headers["Cookie"] = f"cookieSsId={self._cookie_ss_id}"
-                resp = await session.post(RECENT_USAGE_URL, json={}, headers=headers)
-                _LOGGER.warning(
-                    "재시도 응답 status=%s url=%s body=%s",
-                    resp.status_code,
-                    resp.url,
-                    resp.text[:300],
+                resp = await session.post(
+                    RECENT_USAGE_URL,
+                    json={"menuType": "time", "TOU": False},
+                    headers=_COMMON_HEADERS,
                 )
                 resp.raise_for_status()
                 data = resp.json()
