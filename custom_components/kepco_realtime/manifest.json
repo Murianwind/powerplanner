@@ -7,6 +7,6 @@
   "documentation": "https://github.com/Murianwind/powerplanner",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Murianwind/powerplanner/issues",
-  "requirements": ["curl_cffi>=0.7.0", "beautifulsoup4>=4.12.0"],
+  "requirements": ["curl_cffi>=0.7.0", "beautifulsoup4>=4.12.0", "rsa>=4.9"],
   "version": "1.0.0"
 }
