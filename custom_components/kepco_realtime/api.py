@@ -73,7 +73,7 @@ class KepcoApiClient:
         """파워플래너에 로그인합니다. 항상 새 세션으로 시작합니다."""
         session = await self._new_session()
 
-        # 1단계: intro 페이지 접근 — cookieRsa, cookieSsId 쿠키 획득
+        # 1단계: intro 페이지 접근
         try:
             resp = await session.get(INTRO_URL)
             resp.raise_for_status()
@@ -89,14 +89,17 @@ class KepcoApiClient:
         if not cookie_rsa or not cookie_ss_id or not exponent_tag:
             _LOGGER.error(
                 "쿠키 또는 RSAExponent 획득 실패 — cookieRsa=%s cookieSsId=%s exponent=%s",
-                bool(cookie_rsa),
-                bool(cookie_ss_id),
-                bool(exponent_tag),
+                bool(cookie_rsa), bool(cookie_ss_id), bool(exponent_tag),
             )
             raise KepcoAuthError("RSA 키 또는 세션 ID를 찾을 수 없습니다.")
 
         exponent = exponent_tag["value"].strip()
-        _LOGGER.debug("RSA 키 및 세션 ID 획득 완료")
+
+        _LOGGER.warning(
+            "쿠키 획득 — cookieSsId 앞20자: %s / exponent: %s",
+            cookie_ss_id[:20] if cookie_ss_id else None,
+            exponent,
+        )
 
         # 2단계: RSA 암호화
         try:
@@ -105,8 +108,8 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"RSA 암호화 실패: {err}") from err
 
-        # 3단계: chkUser.do 호출 — SSO_ID 값 획득 (브라우저 로그인 흐름과 동일)
-        sso_id = ""
+        # 3단계: chkUser.do
+        sso_id = "N"
         try:
             chk_resp = await session.post(
                 f"{BASE_URL}/intro/chkUser.do",
@@ -123,26 +126,29 @@ class KepcoApiClient:
                 },
             )
             chk_data = chk_resp.json()
-            _LOGGER.debug("chkUser 응답: %s", chk_data)
+            _LOGGER.warning("chkUser 응답: %s", chk_data)
             result = chk_data.get("result", "")
             if result == "success":
-                sso_id = chk_data.get("USER_SSO_YN", "")
+                sso_id = chk_data.get("USER_SSO_YN", "N")
             elif result == "addCustno":
-                _LOGGER.error("고객번호 추가 필요 — 파워플래너 웹에서 먼저 설정해주세요.")
+                _LOGGER.error("고객번호 추가 필요")
                 return False
         except Exception as err:
-            _LOGGER.warning("chkUser.do 호출 실패 (무시하고 진행): %s", err)
+            _LOGGER.warning("chkUser.do 호출 실패: %s", err)
 
         # 4단계: 로그인 POST
+        login_data = {
+            "USER_ID": f"{cookie_ss_id}_{enc_id}",
+            "USER_PWD": f"{cookie_ss_id}_{enc_pw}",
+            "APT_YN": "N",
+            "SSO_ID": sso_id,
+        }
+        _LOGGER.warning("로그인 파라미터 키: %s", list(login_data.keys()))
+
         try:
             resp = await session.post(
                 LOGIN_URL,
-                data={
-                    "USER_ID": f"{cookie_ss_id}_{enc_id}",
-                    "USER_PWD": f"{cookie_ss_id}_{enc_pw}",
-                    "APT_YN": "N",
-                    "SSO_ID": sso_id,
-                },
+                data=login_data,
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": INTRO_URL,
@@ -152,14 +158,20 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"로그인 요청 실패: {err}") from err
 
-        _LOGGER.debug("로그인 응답 url=%s status=%s", resp.url, resp.status_code)
+        _LOGGER.warning("로그인 응답 url=%s status=%s", resp.url, resp.status_code)
 
         if "confirmInfo.do" in str(resp.url):
-            _LOGGER.debug("로그인 성공")
+            _LOGGER.warning("로그인 성공")
             return True
 
-        _LOGGER.error("로그인 실패: %s", resp.url)
-        _LOGGER.error("로그인 실패 응답 body: %s", resp.text[:500])
+        # 실패 시 status 변수 확인
+        fail_soup = BeautifulSoup(resp.text, "html.parser")
+        status_script = fail_soup.find("script", string=lambda t: t and "status" in t if t else False)
+        _LOGGER.error(
+            "로그인 실패 url=%s — status 스크립트: %s",
+            resp.url,
+            status_script.text[:300] if status_script else "없음",
+        )
         return False
 
     async def async_get_realtime_usage(self) -> dict:
