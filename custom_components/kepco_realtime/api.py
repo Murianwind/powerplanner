@@ -37,6 +37,7 @@ class KepcoApiClient:
         self._username = username
         self._password = password
         self._session: AsyncSession | None = None
+        self._cookie_ss_id: str | None = None
 
     async def _new_session(self) -> AsyncSession:
         """기존 세션을 닫고 새 세션을 만듭니다."""
@@ -63,6 +64,7 @@ class KepcoApiClient:
     async def async_login(self) -> bool:
         """파워플래너에 로그인합니다. 항상 새 세션으로 시작합니다."""
         session = await self._new_session()
+        self._cookie_ss_id = None
 
         try:
             resp = await session.get(INTRO_URL)
@@ -107,33 +109,55 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"로그인 요청 실패: {err}") from err
 
-        if "confirmInfo.do" in str(resp.url):
-            _LOGGER.debug("로그인 성공")
-            return True
+        if "confirmInfo.do" not in str(resp.url):
+            _LOGGER.error("로그인 실패: %s", resp.url)
+            return False
 
-        _LOGGER.error("로그인 실패: %s", resp.url)
-        return False
+        # 로그인 성공 후 cookieSsId 추출
+        cookie_ss_id = session.cookies.get("cookieSsId")
+        if not cookie_ss_id:
+            # 응답 헤더에서 직접 찾기
+            for header_val in resp.headers.get_list("set-cookie"):
+                if "cookieSsId" in header_val:
+                    cookie_ss_id = header_val.split("cookieSsId=")[1].split(";")[0]
+                    break
+
+        if cookie_ss_id:
+            self._cookie_ss_id = cookie_ss_id
+            _LOGGER.debug("cookieSsId 획득 완료")
+        else:
+            _LOGGER.warning("cookieSsId를 찾을 수 없습니다. 세션 쿠키로 시도합니다.")
+
+        _LOGGER.debug("로그인 성공")
+        return True
 
     async def async_get_realtime_usage(self) -> dict:
         """실시간 사용량 데이터를 가져옵니다."""
         session = await self._get_session()
 
+        headers: dict[str, str] = {}
+        if self._cookie_ss_id:
+            headers["Cookie"] = f"cookieSsId={self._cookie_ss_id}"
+
         try:
-            resp = await session.post(RECENT_USAGE_URL, json={})
+            resp = await session.post(RECENT_USAGE_URL, json={}, headers=headers)
             resp.raise_for_status()
             data = resp.json()
         except Exception as err:
-            _LOGGER.warning("API 호출 실패 (원인: %s), 새 세션으로 재로그인 시도", err)
+            _LOGGER.warning("API 호출 실패 (원인: %s), 재로그인 시도", err)
             if not await self.async_login():
                 raise KepcoAuthError("재로그인 실패")
             try:
                 session = await self._get_session()
-                resp = await session.post(RECENT_USAGE_URL, json={})
+                headers = {}
+                if self._cookie_ss_id:
+                    headers["Cookie"] = f"cookieSsId={self._cookie_ss_id}"
+                resp = await session.post(RECENT_USAGE_URL, json={}, headers=headers)
                 _LOGGER.warning(
                     "재시도 응답 status=%s url=%s body=%s",
                     resp.status_code,
                     resp.url,
-                    resp.text[:500],
+                    resp.text[:300],
                 )
                 resp.raise_for_status()
                 data = resp.json()
