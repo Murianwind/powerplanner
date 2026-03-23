@@ -122,17 +122,23 @@ class KepcoApiClient:
             resp = await session.post(RECENT_USAGE_URL, json={})
             resp.raise_for_status()
             data = resp.json()
-        except Exception:
-            _LOGGER.warning("API 호출 실패, 새 세션으로 재로그인 시도")
+        except Exception as err:
+            _LOGGER.warning("API 호출 실패 (원인: %s), 새 세션으로 재로그인 시도", err)
             if not await self.async_login():
                 raise KepcoAuthError("재로그인 실패")
             try:
                 session = await self._get_session()
                 resp = await session.post(RECENT_USAGE_URL, json={})
+                _LOGGER.warning(
+                    "재시도 응답 status=%s url=%s body=%s",
+                    resp.status_code,
+                    resp.url,
+                    resp.text[:500],
+                )
                 resp.raise_for_status()
                 data = resp.json()
-            except Exception as err:
-                raise KepcoApiError(f"재시도 후에도 실패: {err}") from err
+            except Exception as retry_err:
+                raise KepcoApiError(f"재시도 후에도 실패: {retry_err}") from retry_err
 
         if not isinstance(data, dict):
             raise KepcoApiError(f"예상치 못한 응답 형식: {type(data)}")
