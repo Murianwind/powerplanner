@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import unquote
 
 import rsa
 from bs4 import BeautifulSoup
@@ -83,11 +84,11 @@ class KepcoApiClient:
         except Exception as err:
             raise KepcoAuthError(f"인트로 페이지 접근 실패: {err}") from err
 
-        _LOGGER.warning("intro.do Set-Cookie: %s", resp.headers.get("set-cookie", "없음"))
-        _LOGGER.warning("세션 쿠키 목록: %s", dict(session.cookies))
-
         cookie_rsa = session.cookies.get("cookieRsa")
-        cookie_ss_id = session.cookies.get("cookieSsId")
+        cookie_ss_id_raw = session.cookies.get("cookieSsId")
+        cookie_ss_id = unquote(cookie_ss_id_raw) if cookie_ss_id_raw else None
+
+        _LOGGER.warning("cookieSsId 디코딩: %s", cookie_ss_id[:30] if cookie_ss_id else None)
 
         soup = BeautifulSoup(resp.text, "html.parser")
         exponent_tag = soup.find("input", {"id": "RSAExponent"})
@@ -180,6 +181,7 @@ class KepcoApiClient:
         return False
 
     async def async_get_realtime_usage(self) -> dict:
+        """실시간 사용량 데이터를 가져옵니다."""
         session = await self._get_session()
 
         try:
