@@ -169,7 +169,7 @@ class KepcoApiClient:
 
         _LOGGER.warning("로그인 응답 url=%s status=%s", resp.url, resp.status_code)
 
-        if "confirmInfo.do" in str(resp.url):
+        if "intro.do" not in str(resp.url):
             _LOGGER.warning("로그인 성공!")
             return True
 
